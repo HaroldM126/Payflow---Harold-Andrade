@@ -49,7 +49,7 @@ canActivate(context: ExecutionContext): boolean {
     this.logger.debug('JWT DECODED: ' + JSON.stringify(decoded));
 
     client.data.user = decoded;
-    client.data.userId = decoded.id;
+    client.data.userId = decoded.sub ?? decoded.id;
     client.data.email = decoded.email;
 
     this.logger.debug('USER ID: ' + client.data.userId);

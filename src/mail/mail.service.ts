@@ -10,12 +10,29 @@ import { OtpStorageService } from './otp/otp-storage.service';
 @Injectable()
 export class MailService {
   private readonly logger = new Logger(MailService.name);
+  private emailQueue: Promise<void> = Promise.resolve();
+  private readonly emailSendDelayMs: number;
 
   constructor(
     @Inject('MAIL_TRANSPORTER') private readonly transporter: nodemailer.Transporter,
     private readonly otpStorageService: OtpStorageService,
     private readonly configService: ConfigService,
-  ) {}
+  ) {
+    this.emailSendDelayMs = Number(
+      this.configService.get<string>('MAIL_SEND_DELAY_MS') ?? '1000',
+    );
+  }
+
+  private sleep(ms: number): Promise<void> {
+    return new Promise((resolve) => setTimeout(resolve, ms));
+  }
+
+  private enqueueEmailSend<T>(job: () => Promise<T>): Promise<T> {
+    const resultPromise = this.emailQueue.then(() => job());
+    this.emailQueue = resultPromise
+      .then(() => this.sleep(this.emailSendDelayMs), () => this.sleep(this.emailSendDelayMs));
+    return resultPromise;
+  }
 
   async sendOtp(email: string) {
     try {
@@ -33,11 +50,13 @@ export class MailService {
       
       const html = template({ code, expiresInMinutes: 5 });
 
-      await this.transporter.sendMail({
-        from: this.configService.get<string>('MAIL_FROM') || 'no-reply@payflow.com',
-        to: email,
-        subject: 'Código OTP de Seguridad - PayFlow',
-        html,
+      await this.enqueueEmailSend(async () => {
+        await this.transporter.sendMail({
+          from: this.configService.get<string>('MAIL_FROM') || 'no-reply@payflow.com',
+          to: email,
+          subject: 'Código OTP de Seguridad - PayFlow',
+          html,
+        });
       });
 
       this.logger.log(`Código OTP generado y enviado a ${email}`);
@@ -65,7 +84,7 @@ export class MailService {
       status: string;
       timestamp: Date;
     },
-  ) {
+  ): Promise<boolean> {
     try {
       const templatePath = path.join(__dirname, '..', 'templates', 'transaction-email.hbs');
       const templateSource = fs.readFileSync(templatePath, 'utf8');
@@ -79,17 +98,20 @@ export class MailService {
         timestamp: payload.timestamp.toLocaleString('es-CO', { timeZone: 'America/Bogota' }),
       });
 
-      await this.transporter.sendMail({
-        from: this.configService.get<string>('MAIL_FROM') || 'no-reply@payflow.com',
-        to: email,
-        subject,
-        html,
+      await this.enqueueEmailSend(async () => {
+        await this.transporter.sendMail({
+          from: this.configService.get<string>('MAIL_FROM') || 'no-reply@payflow.com',
+          to: email,
+          subject,
+          html,
+        });
       });
 
       this.logger.log(`Notificación de transacción enviada por correo a ${email}`);
+      return true;
     } catch (error: any) {
       this.logger.error(`Error al enviar notificación de transacción a ${email}: ${error.message}`);
-      // No arrojamos excepción aquí para no bloquear el flujo de la transferencia si falla el correo
+      return false;
     }
   }
 }

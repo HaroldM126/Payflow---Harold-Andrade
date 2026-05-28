@@ -11,7 +11,7 @@ export const MailProvider = {
       secure: configService.get<number>('MAIL_PORT') === 465, // true para puerto 465, false para otros
       auth: {
         user: configService.get<string>('MAIL_USER'),
-        password: configService.get<string>('MAIL_PASSWORD'),
+        pass: configService.get<string>('MAIL_PASSWORD'),
       },
     } as any);
   },
