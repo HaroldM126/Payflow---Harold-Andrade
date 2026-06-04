@@ -113,9 +113,10 @@ export class NotificationsGateway
             const socketEmit = socket as unknown as { emit: (event: string, payload?: unknown) => void };
             if (typeof socketEmit.emit === 'function') {
               socketEmit.emit('session_expired', {
-              message:
-                'Tu sesión ha expirado. Por favor, inicia sesión nuevamente.',
-            });
+                message:
+                  'Tu sesión ha expirado. Por favor, inicia sesión nuevamente.',
+              });
+            }
             const socketDisconnect = socket as unknown as Record<
               string,
               Function
