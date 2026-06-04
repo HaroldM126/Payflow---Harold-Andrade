@@ -1,4 +1,10 @@
-import {WebSocketGateway, WebSocketServer, OnGatewayConnection, OnGatewayDisconnect, SubscribeMessage,} from '@nestjs/websockets';
+import {
+  WebSocketGateway,
+  WebSocketServer,
+  OnGatewayConnection,
+  OnGatewayDisconnect,
+  SubscribeMessage,
+} from '@nestjs/websockets';
 import { Server, Socket } from 'socket.io';
 import { Logger, Inject, OnModuleInit, OnModuleDestroy } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
@@ -7,13 +13,17 @@ import { ConnectedUsersService } from './connected-users.service';
 
 @WebSocketGateway({
   cors: {
-    origin: '*', 
+    origin: '*',
     credentials: true,
   },
   namespace: '/notifications',
 })
 export class NotificationsGateway
-  implements OnGatewayConnection, OnGatewayDisconnect, OnModuleInit, OnModuleDestroy
+  implements
+    OnGatewayConnection,
+    OnGatewayDisconnect,
+    OnModuleInit,
+    OnModuleDestroy
 {
   @WebSocketServer()
   server!: Server;
@@ -32,7 +42,9 @@ export class NotificationsGateway
     this.cleanupInterval = setInterval(() => {
       this.checkExpiredTokens();
     }, 60000); // 60 seconds
-    this.logger.log('⏰ Servidor WebSocket inicializado con chequeo de expiración JWT (cada 60 segundos)');
+    this.logger.log(
+      '⏰ Servidor WebSocket inicializado con chequeo de expiración JWT (cada 60 segundos)',
+    );
   }
 
   onModuleDestroy() {
@@ -43,78 +55,134 @@ export class NotificationsGateway
 
   private checkExpiredTokens() {
     try {
-      this.logger.debug('⏰ Ejecutando chequeo proactivo de tokens JWT expirados...');
+      this.logger.debug(
+        '⏰ Ejecutando chequeo proactivo de tokens JWT expirados...',
+      );
       if (!this.server) {
-        this.logger.warn('Servidor WebSocket aún no disponible para el chequeo de expiración');
+        this.logger.warn(
+          'Servidor WebSocket aún no disponible para el chequeo de expiración',
+        );
         return;
       }
 
-      const namespace: any = typeof (this.server as any).of === 'function'
-        ? (this.server as any).of('/notifications')
-        : this.server;
-      const socketsCollection = namespace?.sockets;
+      const serverAny = this.server as unknown as {
+        of?: (name: string) => unknown;
+      };
+      const namespace =
+        typeof serverAny.of === 'function'
+          ? (serverAny as { of: (name: string) => unknown }).of(
+              '/notifications',
+            )
+          : this.server;
+      const socketsCollection = (namespace as Record<string, unknown>)?.sockets;
       const now = Math.floor(Date.now() / 1000);
       let disconnectCount = 0;
 
-      const sockets = socketsCollection instanceof Map
-        ? Array.from(socketsCollection.values())
-        : socketsCollection?.sockets instanceof Map
-          ? Array.from(socketsCollection.sockets.values())
-          : [];
+      const sockets =
+        socketsCollection instanceof Map
+          ? Array.from(socketsCollection.values())
+          : (socketsCollection as Record<string, unknown>)?.sockets instanceof
+              Map
+            ? Array.from(
+                (
+                  (socketsCollection as Record<string, unknown>).sockets as Map<
+                    unknown,
+                    unknown
+                  >
+                ).values(),
+              )
+            : [];
 
       for (const socket of sockets) {
-        const user = socket.data?.user;
-        if (user && user.exp) {
-          if (now >= user.exp) {
+        const socketData = socket as Record<string, unknown>;
+        const user = socketData.data as Record<string, unknown> | undefined;
+        const userData = user?.user as Record<string, unknown> | undefined;
+        const exp = userData?.exp as number | undefined;
+        if (userData && exp) {
+          if (now >= exp) {
+            const email = (userData.email as string) || 'desconocido';
+            const userId = socketData.data as
+              | Record<string, unknown>
+              | undefined;
+            const userIdValue =
+              (userId?.userId as number | undefined) ||
+              (userData.sub as number | undefined);
             this.logger.warn(
-              `🔒 Sesión expirada para el usuario ${user.email || 'desconocido'} (ID: ${user.sub || socket.data.userId}). Desconectando socket proactivamente: ${socket.id}`,
+              `🔒 Sesión expirada para el usuario ${email} (ID: ${userIdValue}). Desconectando socket proactivamente: ${socketData.id}`,
             );
-            socket.emit('session_expired', { message: 'Tu sesión ha expirado. Por favor, inicia sesión nuevamente.' });
-            socket.disconnect(true);
+            const socketEmit = socket as unknown as { emit: (event: string, payload?: unknown) => void };
+            if (typeof socketEmit.emit === 'function') {
+              socketEmit.emit('session_expired', {
+              message:
+                'Tu sesión ha expirado. Por favor, inicia sesión nuevamente.',
+            });
+            const socketDisconnect = socket as unknown as Record<
+              string,
+              Function
+            >;
+            socketDisconnect.disconnect(true);
             disconnectCount++;
           }
         }
       }
 
       if (disconnectCount > 0) {
-        this.logger.log(`⏰ Se desconectaron proactivamente ${disconnectCount} sockets con tokens JWT expirados.`);
+        this.logger.log(
+          `⏰ Se desconectaron proactivamente ${disconnectCount} sockets con tokens JWT expirados.`,
+        );
       }
-    } catch (error: any) {
-      this.logger.error('Error al realizar el chequeo de tokens expirados', error);
+    } catch (error) {
+      this.logger.error(
+        'Error al realizar el chequeo de tokens expirados',
+        error,
+      );
     }
   }
 
   handleConnection(client: Socket) {
     try {
       this.logger.debug('SOCKET CONNECTED');
-      this.logger.debug('handshake.auth: ' + JSON.stringify(client.handshake.auth));
+      this.logger.debug(
+        'handshake.auth: ' + JSON.stringify(client.handshake.auth),
+      );
 
       const token = this.extractTokenFromSocket(client);
       const tokenSource = this.getTokenSource(client);
       this.logger.debug(`token source: ${tokenSource}`);
 
       if (!token) {
-        this.logger.warn(`Conexión rechazada por falta de token. Socket: ${client.id}`);
+        this.logger.warn(
+          `Conexión rechazada por falta de token. Socket: ${client.id}`,
+        );
         client.emit('connection_error', { message: 'Auth token missing' });
         client.disconnect(true);
         return;
       }
 
       const jwtSecret = this.configService.get<string>('JWT_SECRET');
-      const decoded = this.jwtService.verify(token, { secret: jwtSecret });
-      const userId = Number(decoded.sub ?? decoded.id);
+      const decoded = this.jwtService.verify(token, {
+        secret: jwtSecret,
+      });
+      const decodedSub = decoded.sub as string | number | undefined;
+      const decodedId = decoded.id as string | number | undefined;
+      const userId = Number(decodedSub ?? decodedId);
       const email = decoded.email as string | undefined;
 
       if (!userId || Number.isNaN(userId)) {
-        this.logger.warn(`Token JWT inválido o sin userId. Socket: ${client.id}`);
-        client.emit('connection_error', { message: 'Invalid authentication data' });
+        this.logger.warn(
+          `Token JWT inválido o sin userId. Socket: ${client.id}`,
+        );
+        client.emit('connection_error', {
+          message: 'Invalid authentication data',
+        });
         client.disconnect(true);
         return;
       }
 
-      client.data.user = decoded;
-      client.data.userId = userId;
-      client.data.email = email;
+      const clientData = client.data as Record<string, unknown>;
+      clientData.user = decoded;
+      clientData.userId = userId;
+      clientData.email = email;
 
       this.connectedUsersService.registerConnection(
         userId,
@@ -178,11 +246,13 @@ export class NotificationsGateway
 
   handleDisconnect(client: Socket) {
     try {
-      const userId = client.data.userId;
-      const email = client.data.email;
+      const clientData = client.data as Record<string, unknown>;
+      const userId = clientData.userId as number | undefined;
+      const email = clientData.email as string | undefined;
 
-      const wasConnected =
-        this.connectedUsersService.disconnectBySocket(client.id);
+      const wasConnected = this.connectedUsersService.disconnectBySocket(
+        client.id,
+      );
 
       if (wasConnected) {
         client.broadcast.emit('user_disconnected', {
@@ -203,25 +273,23 @@ export class NotificationsGateway
     } catch (error) {
       const errorMessage =
         error instanceof Error ? error.message : 'Error desconocido';
-      this.logger.error(
-        ` Error en handleDisconnect: ${errorMessage}`,
-        error,
-      );
+      this.logger.error(` Error en handleDisconnect: ${errorMessage}`, error);
     }
   }
 
   @SubscribeMessage('ping')
   handlePing(client: Socket): { event: string; data: string } {
-    const userId = client.data.userId;
+    const clientData = client.data as Record<string, unknown>;
+    const userId = clientData.userId as number | undefined;
     this.logger.debug(`Ping recibido de usuario ${userId}`);
     return { event: 'pong', data: `pong-${new Date().getTime()}` };
   }
 
   @SubscribeMessage('get_connection_status')
   handleGetConnectionStatus(client: Socket) {
-    const userId = client.data.userId;
-    const connectionInfo =
-      this.connectedUsersService.getConnectionInfo(userId);
+    const clientData = client.data as Record<string, unknown>;
+    const userId = clientData.userId as number;
+    const connectionInfo = this.connectedUsersService.getConnectionInfo(userId);
 
     return {
       event: 'connection_status',
@@ -229,11 +297,13 @@ export class NotificationsGateway
         userId,
         socketId: client.id,
         isConnected: true,
-        connectedAt: connectionInfo?.connectedAt || new Date(),
+        connectedAt:
+          (connectionInfo as Record<string, unknown> | undefined)
+            ?.connectedAt || new Date(),
       },
     };
   }
-  
+
   notifyTransferSent(
     fromUserId: number,
     transactionData: {
@@ -337,18 +407,20 @@ export class NotificationsGateway
     });
   }
 
-  sendNotificationToUser(
-    userId: number,
-    eventName: string,
-    data: any,
-  ) {
-    const socketIds = this.connectedUsersService.getSocketIds(userId);
+  sendNotificationToUser(userId: number, eventName: string, data: unknown) {
+    const socketIds = this.connectedUsersService.getSocketIds(
+      userId,
+    ) as unknown;
+    const socketIdsArray = Array.isArray(socketIds) ? socketIds : [];
 
-    this.logger.debug(`SEND WS EVENT to ${socketIds.length} sockets: ` + JSON.stringify({ userId, socketIds, eventName }));
+    this.logger.debug(
+      `SEND WS EVENT to ${socketIdsArray.length} sockets: ` +
+        JSON.stringify({ userId, socketIds: socketIdsArray, eventName }),
+    );
 
-    if (socketIds.length > 0) {
-      for (const socketId of socketIds) {
-        this.server.to(socketId).emit(eventName, data);
+    if (socketIdsArray.length > 0) {
+      for (const socketId of socketIdsArray) {
+        this.server.to(String(socketId)).emit(eventName, data);
         this.logger.log(`EVENT SENT TO SOCKET: ${socketId} for user ${userId}`);
       }
     } else {
@@ -360,4 +432,3 @@ export class NotificationsGateway
     return this.connectedUsersService.isConnected(userId);
   }
 }
-
